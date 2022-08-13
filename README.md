@@ -1,2 +1,3 @@
-# spotify-player
-Spotify controller widget for linux using PyQt5
+# linux-media-controller
+
+Media controller widget for linux using PyQt5
