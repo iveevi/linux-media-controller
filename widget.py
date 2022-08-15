@@ -100,7 +100,7 @@ class Visualizer(QGLWidget):
         # Timer for updating the widget
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
-        self.timer.start(int(1000/100))
+        self.timer.start(int(1000/60))
 
         # Properties
         self.setMinimumSize(200, 200)
@@ -156,8 +156,6 @@ class Visualizer(QGLWidget):
         dt = ctime - self.ptime
         self.ptime = ctime
 
-        print(f'Frametime: {1000 * dt: .2f} ms')
-
         # Draw rectangle at each data point
         bar_width = 1/len(self.data)
 
@@ -172,6 +170,18 @@ class Visualizer(QGLWidget):
             glVertex2f((i+1)*bar_width, 0)
 
         glEnd()
+
+# Work object for the main window
+class Updater(QtCore.QObject):
+    finished = QtCore.pyqtSignal()
+
+    def __init__(self, widget):
+        QtCore.QObject.__init__(self)
+        self.widget = widget
+
+    def run(self):
+        self.widget.update_widget()
+        self.finished.emit()
 
 # Widget
 class MediaWidget(QWidget):
@@ -390,8 +400,18 @@ class MediaWidget(QWidget):
 
         # Timer to update the widget
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_widget)
+        self.timer.timeout.connect(self.update_function)
         self.timer.start(1000)
+
+    def update_function(self):
+        self.worker = Updater(self)
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self.thread.deleteLater)
+        self.thread.started.connect(self.worker.run)
+        self.thread.start()
 
     def update_widget(self):
         # Run the script to get the latest status
@@ -429,8 +449,6 @@ class MediaWidget(QWidget):
         pixmap = QPixmap(image_path)
         pixmap = pixmap.scaled(200, 200, QtCore.Qt.KeepAspectRatio)
         self.image.setPixmap(pixmap)
-
-        print('[Updated widget]')
 
     def play_pause_button_clicked(self):
         do_cmd(play_pause_cmd)
