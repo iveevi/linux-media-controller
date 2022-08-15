@@ -16,8 +16,8 @@ status=$(playerctl -p $PLAYER status 2> /dev/null)
 
 # Check if spotify is even running
 if [ ! "$status" ]; then
-    echo "$PLAYER is not running"
-    exit 1
+	echo ":$PLAYER is not running::0:0"
+	exit 0
 fi
 
 # Get icon for status

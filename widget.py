@@ -1,9 +1,13 @@
+import atexit
+import numpy as np
 import subprocess
 import sys
+import time
 
+from threading import Thread
 from pathlib import Path
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets, QtOpenGL
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QHBoxLayout
@@ -14,7 +18,16 @@ from PyQt5.QtWidgets import QFrame
 
 from PyQt5.QtGui import QPixmap
 
+from PyQt5.QtOpenGL import QGLWidget
+
+from OpenGL.GL import *
+from OpenGL.GLU import *
+
+# Qt app
 app = QApplication(sys.argv)
+
+# Directory of this file
+dir_path = Path(__file__).parent.absolute()
 
 # TODO: skip the script step
 
@@ -23,7 +36,7 @@ next_cmd       = 'playerctl -p spotify next'
 play_pause_cmd = 'playerctl -p spotify play-pause'
 prev_cmd       = 'playerctl -p spotify previous'
 repeat_cmd     = 'playerctl -p spotify loop'
-script_cmd     = './media_status.sh'
+script_cmd     = f'{dir_path}/media_status.sh'
 shuffle_cmd    = 'playerctl -p spotify shuffle'
 status_cmd     = 'playerctl -p spotify status'
 
@@ -43,16 +56,16 @@ def do_cmd(cmd):
 # Paths
 image_path = str(Path.home()) + '/.cache/media_album_cover'
 
-play_icon            = QtGui.QIcon('./icons/media-playback-start.svg')
-pause_icon           = QtGui.QIcon('./icons/media-playback-pause.svg')
-next_icon            = QtGui.QIcon('./icons/media-skip-forward.svg')
-prev_icon            = QtGui.QIcon('./icons/media-skip-backward.svg')
-shuffle_icon         = QtGui.QIcon('./icons/media-playlist-shuffle.svg')
-repeat_off_icon      = QtGui.QIcon('./icons/media-playlist-repeat.svg')
-repeat_track_icon    = QtGui.QIcon('./icons/media-playlist-repeat-track.svg')
-repeat_playlist_icon = QtGui.QIcon('./icons/media-playlist-repeat.svg')
-spotify_icon         = QtGui.QIcon('./images/spotify_logo.png')
-chrome_icon          = QtGui.QIcon('./images/chrome_logo.png')
+play_icon            = QtGui.QIcon(f'{dir_path}/icons/media-playback-start.svg')
+pause_icon           = QtGui.QIcon(f'{dir_path}/icons/media-playback-pause.svg')
+next_icon            = QtGui.QIcon(f'{dir_path}/icons/media-skip-forward.svg')
+prev_icon            = QtGui.QIcon(f'{dir_path}/icons/media-skip-backward.svg')
+shuffle_icon         = QtGui.QIcon(f'{dir_path}/icons/media-playlist-shuffle.svg')
+repeat_off_icon      = QtGui.QIcon(f'{dir_path}/icons/media-playlist-repeat.svg')
+repeat_track_icon    = QtGui.QIcon(f'{dir_path}/icons/media-playlist-repeat-track.svg')
+repeat_playlist_icon = QtGui.QIcon(f'{dir_path}/icons/media-playlist-repeat.svg')
+spotify_icon         = QtGui.QIcon(f'{dir_path}/images/spotify_logo.png')
+chrome_icon          = QtGui.QIcon(f'{dir_path}/images/chrome_logo.png')
 
 def get_shuffle_status():
     status = do_cmd(shuffle_cmd)
@@ -79,16 +92,94 @@ def format_time(seconds):
     seconds = seconds % 60
     return '{:02d}:{:02d}'.format(minutes, seconds)
 
+# OpenGL music visualizer widget
+class Visualizer(QGLWidget):
+    def __init__(self, parent):
+        QGLWidget.__init__(self, parent)
+
+        # Timer for updating the widget
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(int(1000/100))
+
+        # Properties
+        self.setMinimumSize(200, 200)
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+
+        # Cached data
+        self.data = None
+
+        # Run process
+        home = str(Path.home())
+        cmd = home + '/sources/cava_raw/.smake/targets/cava'
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+
+        # Thread for caching data
+        self.thread = Thread(target=self.cache_data, args=(self.proc.stdout,))
+        self.thread.start()
+
+        self.ptime = time.time()
+    
+    def cache_data(self, stdout):
+        for line in iter(stdout.readline, b''):
+            line = line.decode('utf-8').strip()
+
+            line = line.split(';')[:-1]
+
+            x = [float(i) for i in line]
+            x = np.array(x)
+
+            x /= 40000
+            x = np.clip(x, 0, 1)
+
+            self.data = x
+
+    def initializeGL(self):
+        glClearColor(0, 0, 0, 1)
+        glClearDepth(1.0)
+        glEnable(GL_DEPTH_TEST)
+
+    def resizeGL(self, width, height):
+        glViewport(0, 0, width, height)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        glOrtho(0, 1, 0, 1, -1, 1)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+
+    def paintGL(self):
+        if self.data is None:
+            return
+
+        ctime = time.time()
+        dt = ctime - self.ptime
+        self.ptime = ctime
+
+        print(f'Frametime: {1000 * dt: .2f} ms')
+
+        # Draw rectangle at each data point
+        bar_width = 1/len(self.data)
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        glBegin(GL_QUADS)
+        for i in range(len(self.data)):
+            glColor3f(1, 0, 0)
+            glVertex2f(i*bar_width, 0)
+            glVertex2f(i*bar_width, self.data[i])
+            glVertex2f((i+1)*bar_width, self.data[i])
+            glVertex2f((i+1)*bar_width, 0)
+
+        glEnd()
+
 # Widget
 class MediaWidget(QWidget):
     def __init__(self):
         super().__init__()
 
         # Initialize the widget
-        media_status = subprocess \
-            .check_output(script_cmd, shell=False) \
-            .decode('utf-8') \
-            .split(':')
+        media_status = do_cmd(script_cmd).split(':')
 
         artist = media_status[0]
         title = media_status[1]
@@ -287,6 +378,10 @@ class MediaWidget(QWidget):
         self.main.addWidget(self.media_players)
         self.main.addWidget(self.media)
 
+        # Add the music visualization
+        self.visualization = Visualizer(self)
+        self.main.addWidget(self.visualization)
+
         self.setStyleSheet('''
             QWidget {
                 background-color: #2e2e2e;
@@ -335,6 +430,8 @@ class MediaWidget(QWidget):
         pixmap = pixmap.scaled(200, 200, QtCore.Qt.KeepAspectRatio)
         self.image.setPixmap(pixmap)
 
+        print('[Updated widget]')
+
     def play_pause_button_clicked(self):
         do_cmd(play_pause_cmd)
 
@@ -355,6 +452,7 @@ class MediaWidget(QWidget):
 
 if __name__ == '__main__':
     widget = MediaWidget()
+    widget.setWindowTitle('linux-media-controller')
     widget.show()
 
     sys.exit(app.exec_())
